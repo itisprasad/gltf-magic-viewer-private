@@ -179,7 +179,7 @@ export const ModelViewer = ({ modelUrl, wireframe, environmentPreset }: ModelVie
               <select
                 value={clippingAxis}
                 onChange={(e) => setClippingAxis(e.target.value as "x" | "y" | "z")}
-                className="ml-2 p-1 rounded border text-sm"
+                className="ml-2 p-1 rounded border text-sm bg-black text-white"
               >
                 <option value="x">X</option>
                 <option value="y">Y</option>
