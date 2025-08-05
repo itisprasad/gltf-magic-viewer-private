@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 
 interface FileUploadProps {
-  onFileUpload: (file: File) => void;
+  onFileUpload: (file: File, name: string) => void;
   isLoading: boolean;
 }
 
@@ -14,12 +14,17 @@ export const FileUpload = ({ onFileUpload, isLoading }: FileUploadProps) => {
     const file = acceptedFiles[0];
     if (file) {
       const fileExtension = file.name.toLowerCase().split('.').pop();
-      if (fileExtension === 'glb' || fileExtension === 'gltf') {
-        onFileUpload(file);
+      if (fileExtension === 'glb' || fileExtension === 'gltf' || fileExtension === 'stl') {
+        console.log("FileUpload: Uploading file:", { name: file.name, type: fileExtension });
+        onFileUpload(file, file.name);
         toast.success("Model uploaded successfully!");
       } else {
-        toast.error("Please upload a .glb or .gltf file");
+        console.warn("FileUpload: Invalid file type:", fileExtension);
+        toast.error("Please upload a .glb, .gltf, or .stl file");
       }
+    } else {
+      console.warn("FileUpload: No file selected");
+      toast.error("No file selected");
     }
   }, [onFileUpload]);
 
@@ -27,7 +32,9 @@ export const FileUpload = ({ onFileUpload, isLoading }: FileUploadProps) => {
     onDrop,
     accept: {
       'model/gltf-binary': ['.glb'],
-      'model/gltf+json': ['.gltf']
+      'model/gltf+json': ['.gltf'],
+      'application/octet-stream': ['.stl'],
+      'model/stl': ['.stl']
     },
     multiple: false,
     disabled: isLoading
@@ -57,7 +64,7 @@ export const FileUpload = ({ onFileUpload, isLoading }: FileUploadProps) => {
               {isDragActive ? "Drop your 3D model here" : "Upload 3D Model"}
             </h3>
             <p className="text-muted-foreground mb-4">
-              Drag & drop your .glb or .gltf file here, or click to browse
+              Drag & drop your .glb, .gltf, or .stl file here, or click to browse
             </p>
             <Button variant="outline" disabled={isLoading}>
               {isLoading ? "Loading..." : "Choose File"}
@@ -65,7 +72,7 @@ export const FileUpload = ({ onFileUpload, isLoading }: FileUploadProps) => {
           </div>
           
           <div className="text-xs text-muted-foreground">
-            Supported formats: .glb, .gltf
+            Supported formats: .glb, .gltf, .stl
           </div>
         </div>
       </div>

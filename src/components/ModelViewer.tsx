@@ -1,20 +1,21 @@
-
-import { useRef, useState, Suspense, useMemo, useEffect } from "react";
-import { Canvas, useThree, useFrame } from "@react-three/fiber";
+import { useRef, useState, Suspense, useMemo, useEffect, Component } from "react";
+import { Canvas, useThree, useLoader } from "@react-three/fiber";
 import { OrbitControls, useGLTF, PerspectiveCamera, Environment } from "@react-three/drei";
 import * as THREE from "three";
 import { Mesh } from "three";
 import { toast } from "sonner";
+import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 
 interface ModelProps {
   url: string;
+  name: string;
   wireframe: boolean;
   clippingEnabled: boolean;
   clippingPlanes: THREE.Plane[];
   highlightEnabled: boolean;
 }
 
-function Model({ url, wireframe, clippingEnabled, clippingPlanes, highlightEnabled }: ModelProps) {
+function GLBModel({ url, wireframe, clippingEnabled, clippingPlanes, highlightEnabled }: ModelProps) {
   const { scene } = useGLTF(url);
   const meshRef = useRef<Mesh>(null);
   const { camera, gl } = useThree();
@@ -64,37 +65,199 @@ function Model({ url, wireframe, clippingEnabled, clippingPlanes, highlightEnabl
       if (originalColor) mat.color.setHex(originalColor);
       setSelected(null);
     }
-  }, [highlightEnabled]);
+  }, [highlightEnabled, selected]);
 
-  scene.traverse((child) => {
-    if (child instanceof Mesh) {
-      child.material = child.material.clone();
-      child.material.wireframe = wireframe;
-
-      if (clippingEnabled) {
-        child.material.clippingPlanes = clippingPlanes;
-        child.material.clipShadows = true;
+  useEffect(() => {
+    clickableMeshes.current = [];
+    scene.traverse((child) => {
+      if (child instanceof Mesh) {
+        child.material = child.material.clone();
+        child.material.wireframe = wireframe;
+        child.material.clippingPlanes = clippingEnabled ? clippingPlanes : [];
+        child.material.clipShadows = clippingEnabled;
         child.material.needsUpdate = true;
-      } else {
-        child.material.clippingPlanes = [];
+        clickableMeshes.current.push(child);
       }
-
-      clickableMeshes.current.push(child);
-    }
-  });
+    });
+  }, [scene, wireframe, clippingEnabled, clippingPlanes]);
 
   return <primitive object={scene} ref={meshRef} />;
+}
+
+function STLModel({ url, wireframe, clippingEnabled, clippingPlanes, highlightEnabled }: ModelProps) {
+  const geometry = useLoader(STLLoader, url, undefined, (error) => {
+    toast.error("Failed to load STL model");
+    console.error("STL loading error:", error);
+  });
+  const meshRef = useRef<Mesh>(null);
+  const { camera, gl } = useThree();
+
+  const raycaster = useRef(new THREE.Raycaster());
+  const mouse = useRef(new THREE.Vector2());
+  const [selected, setSelected] = useState<THREE.Mesh | null>(null);
+
+  useEffect(() => {
+    if (meshRef.current && geometry) {
+      geometry.computeBoundingBox();
+      const box = geometry.boundingBox!;
+      const center = box.getCenter(new THREE.Vector3());
+      geometry.translate(-center.x, -center.y, -center.z);
+
+      const material = meshRef.current.material as THREE.MeshStandardMaterial;
+      material.wireframe = wireframe;
+      material.clippingPlanes = clippingEnabled ? clippingPlanes : [];
+      material.clipShadows = clippingEnabled;
+      material.needsUpdate = true;
+    }
+  }, [geometry, wireframe, clippingEnabled, clippingPlanes]);
+
+  useEffect(() => {
+    const handleClick = (event: MouseEvent) => {
+      if (!highlightEnabled || !meshRef.current) return;
+
+      const bounds = gl.domElement.getBoundingClientRect();
+      mouse.current.x = ((event.clientX - bounds.left) / bounds.width) * 2 - 1;
+      mouse.current.y = -((event.clientY - bounds.top) / bounds.height) * 2 + 1;
+
+      raycaster.current.setFromCamera(mouse.current, camera);
+      const intersects = raycaster.current.intersectObject(meshRef.current, true);
+
+      if (intersects.length > 0) {
+        const mesh = intersects[0].object as THREE.Mesh;
+
+        if (selected && selected !== mesh) {
+          const prevMat = selected.material as THREE.MeshStandardMaterial;
+          const origColor = selected.userData.originalColor;
+          if (origColor) prevMat.color.setHex(origColor);
+        }
+
+        if (!mesh.userData.originalColor) {
+          mesh.userData.originalColor = (mesh.material as THREE.MeshStandardMaterial).color.getHex();
+        }
+
+        (mesh.material as THREE.MeshStandardMaterial).color.set(0xff0000);
+        setSelected(mesh);
+      }
+    };
+
+    gl.domElement.addEventListener("click", handleClick);
+    return () => gl.domElement.removeEventListener("click", handleClick);
+  }, [highlightEnabled, camera, gl, selected]);
+
+  useEffect(() => {
+    if (!highlightEnabled && selected) {
+      const mat = selected.material as THREE.MeshStandardMaterial;
+      const originalColor = selected.userData.originalColor;
+      if (originalColor) mat.color.setHex(originalColor);
+      setSelected(null);
+    }
+  }, [highlightEnabled, selected]);
+
+  return (
+    <mesh ref={meshRef} geometry={geometry} castShadow receiveShadow>
+      <meshStandardMaterial
+        color={0x808080}
+        wireframe={wireframe}
+        clippingPlanes={clippingEnabled ? clippingPlanes : []}
+        clipShadows={clippingEnabled}
+        side={THREE.DoubleSide}
+      />
+    </mesh>
+  );
+}
+
+class ModelErrorBoundary extends Component<{ children: React.ReactNode }, { hasError: boolean }> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error) {
+    console.error("ModelErrorBoundary caught error:", error);
+    toast.error("Failed to load model. Please ensure the file is a valid .glb, .gltf, or .stl.");
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="absolute inset-0 flex items-center justify-center">
+          <p className="text-muted-foreground">Error loading model. Please try another file.</p>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+function Model({ url, name, wireframe, clippingEnabled, clippingPlanes, highlightEnabled }: ModelProps) {
+  const [isSTL, setIsSTL] = useState(name.toLowerCase().endsWith(".stl"));
+  const [isLoadingType, setIsLoadingType] = useState(name === "unknown");
+
+  useEffect(() => {
+    if (name === "unknown") {
+      console.log("Model: Checking file type for:", { url, name });
+      setIsLoadingType(true);
+      const loader = new STLLoader();
+      loader.load(
+        url,
+        () => {
+          console.log("Model: Confirmed STL file");
+          setIsSTL(true);
+          setIsLoadingType(false);
+        },
+        undefined,
+        (error) => {
+          console.log("Model: Not an STL file, attempting GLTF", error);
+          setIsSTL(false);
+          setIsLoadingType(false);
+        }
+      );
+    } else {
+      setIsLoadingType(false);
+    }
+  }, [url, name]);
+
+  console.log("Model component:", { url, name, isSTL, isLoadingType });
+
+  if (isLoadingType) {
+    return null; // Wait for file type detection
+  }
+
+  return (
+    <ModelErrorBoundary>
+      {isSTL ? (
+        <STLModel
+          url={url}
+          name={name}
+          wireframe={wireframe}
+          clippingEnabled={clippingEnabled}
+          clippingPlanes={clippingPlanes}
+          highlightEnabled={highlightEnabled}
+        />
+      ) : (
+        <GLBModel
+          url={url}
+          name={name}
+          wireframe={wireframe}
+          clippingEnabled={clippingEnabled}
+          clippingPlanes={clippingPlanes}
+          highlightEnabled={highlightEnabled}
+        />
+      )}
+    </ModelErrorBoundary>
+  );
 }
 
 interface ModelViewerProps {
   modelUrl: string | null;
   wireframe: boolean;
   environmentPreset: "sunset" | "dawn" | "night" | "warehouse" | "forest" | "apartment" | "studio" | "city" | "park" | "lobby";
+  modelName: string | null;
 }
 
-export const ModelViewer = ({ modelUrl, wireframe, environmentPreset }: ModelViewerProps) => {
+export const ModelViewer = ({ modelUrl, wireframe, environmentPreset, modelName }: ModelViewerProps) => {
   const controlsRef = useRef<any>(null);
-
   const [clippingEnabled, setClippingEnabled] = useState(false);
   const [clippingAxis, setClippingAxis] = useState<"x" | "y" | "z">("x");
   const [planeConstant, setPlaneConstant] = useState(0);
@@ -112,17 +275,37 @@ export const ModelViewer = ({ modelUrl, wireframe, environmentPreset }: ModelVie
     }
   };
 
+  useEffect(() => {
+    console.log("ModelViewer props:", { modelUrl, modelName });
+    if (!modelUrl) {
+      console.warn("ModelViewer: modelUrl is null");
+      toast.info("Please upload a 3D model to view");
+    }
+    if (!modelName) {
+      console.warn("ModelViewer: modelName is null, attempting to detect file type");
+    }
+  }, [modelUrl, modelName]);
+
+  useEffect(() => {
+    return () => {
+      if (modelUrl) {
+        console.log("ModelViewer: Revoking URL:", modelUrl);
+        URL.revokeObjectURL(modelUrl);
+      }
+    };
+  }, [modelUrl]);
+
   return (
     <div className="relative w-full h-full bg-canvas-bg rounded-lg overflow-hidden">
-      <Canvas shadows gl={{ localClippingEnabled: true }}>
+      <Canvas shadows gl={{ localClippingEnabled: true, preserveDrawingBuffer: true }}>
         <PerspectiveCamera makeDefault position={[0, 0, 5]} />
         <ambientLight intensity={0.4} />
         <directionalLight
           position={[10, 10, 5]}
           intensity={1}
           castShadow
-          shadow-mapSize-width={2048}
-          shadow-mapSize-height={2048}
+          shadow-mapSize-width={1024}
+          shadow-mapSize-height={1024}
         />
         <Environment preset={environmentPreset} />
         <OrbitControls
@@ -144,6 +327,7 @@ export const ModelViewer = ({ modelUrl, wireframe, environmentPreset }: ModelVie
           >
             <Model
               url={modelUrl}
+              name={modelName || "unknown"}
               wireframe={wireframe}
               clippingEnabled={clippingEnabled}
               clippingPlanes={clippingPlanes}
@@ -228,4 +412,3 @@ export const ModelViewer = ({ modelUrl, wireframe, environmentPreset }: ModelVie
 };
 
 export default ModelViewer;
-
