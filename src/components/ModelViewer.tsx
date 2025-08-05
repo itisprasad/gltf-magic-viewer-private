@@ -49,8 +49,9 @@ function GLBModel({ url, wireframe, clippingEnabled, clippingPlanes, highlightEn
           mesh.userData.originalColor = (mesh.material as THREE.MeshStandardMaterial).color.getHex();
         }
 
-        (mesh.material as THREE.MeshStandardMaterial).color.set(0xff0000);
+        (mesh.material as THREE.MeshStandardMaterial).color.set(0xff0000); // Standard red highlight
         setSelected(mesh);
+        console.log("GLBModel: Highlighted mesh:", { meshName: mesh.name, color: "red" });
       }
     };
 
@@ -64,6 +65,7 @@ function GLBModel({ url, wireframe, clippingEnabled, clippingPlanes, highlightEn
       const originalColor = selected.userData.originalColor;
       if (originalColor) mat.color.setHex(originalColor);
       setSelected(null);
+      console.log("GLBModel: Highlight reset");
     }
   }, [highlightEnabled, selected]);
 
@@ -72,6 +74,9 @@ function GLBModel({ url, wireframe, clippingEnabled, clippingPlanes, highlightEn
     scene.traverse((child) => {
       if (child instanceof Mesh) {
         child.material = child.material.clone();
+        if (!child.userData.originalColor) {
+          child.userData.originalColor = (child.material as THREE.MeshStandardMaterial).color.getHex();
+        }
         child.material.wireframe = wireframe;
         child.material.clippingPlanes = clippingEnabled ? clippingPlanes : [];
         child.material.clipShadows = clippingEnabled;
@@ -104,6 +109,9 @@ function STLModel({ url, wireframe, clippingEnabled, clippingPlanes, highlightEn
       geometry.translate(-center.x, -center.y, -center.z);
 
       const material = meshRef.current.material as THREE.MeshStandardMaterial;
+      if (!meshRef.current.userData.originalColor) {
+        meshRef.current.userData.originalColor = material.color.getHex();
+      }
       material.wireframe = wireframe;
       material.clippingPlanes = clippingEnabled ? clippingPlanes : [];
       material.clipShadows = clippingEnabled;
@@ -135,8 +143,9 @@ function STLModel({ url, wireframe, clippingEnabled, clippingPlanes, highlightEn
           mesh.userData.originalColor = (mesh.material as THREE.MeshStandardMaterial).color.getHex();
         }
 
-        (mesh.material as THREE.MeshStandardMaterial).color.set(0xff0000);
+        (mesh.material as THREE.MeshStandardMaterial).color.set(0xff0000); // Standard red highlight
         setSelected(mesh);
+        console.log("STLModel: Highlighted mesh:", { meshName: mesh.name, color: "red" });
       }
     };
 
@@ -150,6 +159,7 @@ function STLModel({ url, wireframe, clippingEnabled, clippingPlanes, highlightEn
       const originalColor = selected.userData.originalColor;
       if (originalColor) mat.color.setHex(originalColor);
       setSelected(null);
+      console.log("STLModel: Highlight reset");
     }
   }, [highlightEnabled, selected]);
 
@@ -192,12 +202,16 @@ class ModelErrorBoundary extends Component<{ children: React.ReactNode }, { hasE
 
 function Model({ url, name, wireframe, clippingEnabled, clippingPlanes, highlightEnabled }: ModelProps) {
   const [isSTL, setIsSTL] = useState(name.toLowerCase().endsWith(".stl"));
-  const [isLoadingType, setIsLoadingType] = useState(name === "unknown");
+  const [isLoadingType, setIsLoadingType] = useState(false);
 
   useEffect(() => {
+    console.log("Model: Initializing with:", { url, name });
+    // Reset state for new file
+    setIsSTL(name.toLowerCase().endsWith(".stl"));
+    setIsLoadingType(name === "unknown");
+
     if (name === "unknown") {
       console.log("Model: Checking file type for:", { url, name });
-      setIsLoadingType(true);
       const loader = new STLLoader();
       loader.load(
         url,
@@ -213,10 +227,8 @@ function Model({ url, name, wireframe, clippingEnabled, clippingPlanes, highligh
           setIsLoadingType(false);
         }
       );
-    } else {
-      setIsLoadingType(false);
     }
-  }, [url, name]);
+  }, [url, name]); // Run on url or name change
 
   console.log("Model component:", { url, name, isSTL, isLoadingType });
 
@@ -326,6 +338,7 @@ export const ModelViewer = ({ modelUrl, wireframe, environmentPreset, modelName 
             }
           >
             <Model
+              key={modelUrl} // Force remount on URL change
               url={modelUrl}
               name={modelName || "unknown"}
               wireframe={wireframe}
