@@ -1,3 +1,5 @@
+// Full updated ModelViewer.tsx with blinking support for STL and GLB/GLTF files
+
 import { useRef, useState, Suspense, useMemo, useEffect, Component } from "react";
 import { Canvas, useThree, useLoader } from "@react-three/fiber";
 import { OrbitControls, useGLTF, PerspectiveCamera, Environment } from "@react-three/drei";
@@ -15,15 +17,57 @@ interface ModelProps {
   highlightEnabled: boolean;
 }
 
+function useBlinking(mesh: THREE.Mesh | null, active: boolean) {
+  const blinkRef = useRef<number | null>(null);
+  const blinkStartTime = useRef<number | null>(null);
+  const originalColor = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!mesh || !active) {
+      if (blinkRef.current) cancelAnimationFrame(blinkRef.current);
+      if (mesh && originalColor.current !== null) {
+        (mesh.material as THREE.MeshStandardMaterial).color.setHex(originalColor.current);
+      }
+      return;
+    }
+
+    const material = mesh.material as THREE.MeshStandardMaterial;
+    originalColor.current = mesh.userData.originalColor || material.color.getHex();
+    blinkStartTime.current = null;
+
+    const animate = (timestamp: number) => {
+      if (!blinkStartTime.current) blinkStartTime.current = timestamp;
+      const elapsed = (timestamp - blinkStartTime.current) / 1000;
+      const blinkSpeed = 2;
+      const factor = Math.abs(Math.sin(elapsed * Math.PI * blinkSpeed));
+      const red = new THREE.Color(0xff0000);
+      const orig = new THREE.Color(originalColor.current!);
+      material.color.lerpColors(orig, red, factor);
+      blinkRef.current = requestAnimationFrame(animate);
+    };
+
+    blinkRef.current = requestAnimationFrame(animate);
+
+    return () => {
+      if (blinkRef.current) cancelAnimationFrame(blinkRef.current);
+      if (mesh && originalColor.current !== null) {
+        (mesh.material as THREE.MeshStandardMaterial).color.setHex(originalColor.current);
+      }
+    };
+  }, [mesh, active]);
+}
+
 function GLBModel({ url, wireframe, clippingEnabled, clippingPlanes, highlightEnabled }: ModelProps) {
   const { scene } = useGLTF(url);
-  const meshRef = useRef<Mesh>(null);
+  const meshRef = useRef<Mesh | null>(null);
   const { camera, gl } = useThree();
 
   const raycaster = useRef(new THREE.Raycaster());
   const mouse = useRef(new THREE.Vector2());
   const clickableMeshes = useRef<THREE.Mesh[]>([]);
   const [selected, setSelected] = useState<THREE.Mesh | null>(null);
+
+  useBlinking(selected, highlightEnabled);
 
   useEffect(() => {
     const handleClick = (event: MouseEvent) => {
@@ -38,36 +82,16 @@ function GLBModel({ url, wireframe, clippingEnabled, clippingPlanes, highlightEn
 
       if (intersects.length > 0) {
         const mesh = intersects[0].object as THREE.Mesh;
-
-        if (selected && selected !== mesh) {
-          const prevMat = selected.material as THREE.MeshStandardMaterial;
-          const origColor = selected.userData.originalColor;
-          if (origColor) prevMat.color.setHex(origColor);
-        }
-
         if (!mesh.userData.originalColor) {
           mesh.userData.originalColor = (mesh.material as THREE.MeshStandardMaterial).color.getHex();
         }
-
-        (mesh.material as THREE.MeshStandardMaterial).color.set(0xff0000); // Standard red highlight
         setSelected(mesh);
-        console.log("GLBModel: Highlighted mesh:", { meshName: mesh.name, color: "red" });
       }
     };
 
     gl.domElement.addEventListener("click", handleClick);
     return () => gl.domElement.removeEventListener("click", handleClick);
-  }, [highlightEnabled, camera, gl, selected]);
-
-  useEffect(() => {
-    if (!highlightEnabled && selected) {
-      const mat = selected.material as THREE.MeshStandardMaterial;
-      const originalColor = selected.userData.originalColor;
-      if (originalColor) mat.color.setHex(originalColor);
-      setSelected(null);
-      console.log("GLBModel: Highlight reset");
-    }
-  }, [highlightEnabled, selected]);
+  }, [highlightEnabled, camera, gl]);
 
   useEffect(() => {
     clickableMeshes.current = [];
@@ -89,17 +113,16 @@ function GLBModel({ url, wireframe, clippingEnabled, clippingPlanes, highlightEn
   return <primitive object={scene} ref={meshRef} />;
 }
 
-function STLModel({ url, wireframe, clippingEnabled, clippingPlanes, highlightEnabled }: ModelProps) {
-  const geometry = useLoader(STLLoader, url, undefined, (error) => {
-    toast.error("Failed to load STL model");
-    console.error("STL loading error:", error);
-  });
+function STLModel(props: ModelProps) {
+  const geometry = useLoader(STLLoader, props.url);
   const meshRef = useRef<Mesh>(null);
   const { camera, gl } = useThree();
 
   const raycaster = useRef(new THREE.Raycaster());
   const mouse = useRef(new THREE.Vector2());
   const [selected, setSelected] = useState<THREE.Mesh | null>(null);
+
+  useBlinking(selected, props.highlightEnabled);
 
   useEffect(() => {
     if (meshRef.current && geometry) {
@@ -112,16 +135,17 @@ function STLModel({ url, wireframe, clippingEnabled, clippingPlanes, highlightEn
       if (!meshRef.current.userData.originalColor) {
         meshRef.current.userData.originalColor = material.color.getHex();
       }
-      material.wireframe = wireframe;
-      material.clippingPlanes = clippingEnabled ? clippingPlanes : [];
-      material.clipShadows = clippingEnabled;
+
+      material.wireframe = props.wireframe;
+      material.clippingPlanes = props.clippingEnabled ? props.clippingPlanes : [];
+      material.clipShadows = props.clippingEnabled;
       material.needsUpdate = true;
     }
-  }, [geometry, wireframe, clippingEnabled, clippingPlanes]);
+  }, [geometry, props.wireframe, props.clippingEnabled, props.clippingPlanes]);
 
   useEffect(() => {
     const handleClick = (event: MouseEvent) => {
-      if (!highlightEnabled || !meshRef.current) return;
+      if (!props.highlightEnabled || !meshRef.current) return;
 
       const bounds = gl.domElement.getBoundingClientRect();
       mouse.current.x = ((event.clientX - bounds.left) / bounds.width) * 2 - 1;
@@ -132,49 +156,30 @@ function STLModel({ url, wireframe, clippingEnabled, clippingPlanes, highlightEn
 
       if (intersects.length > 0) {
         const mesh = intersects[0].object as THREE.Mesh;
-
-        if (selected && selected !== mesh) {
-          const prevMat = selected.material as THREE.MeshStandardMaterial;
-          const origColor = selected.userData.originalColor;
-          if (origColor) prevMat.color.setHex(origColor);
-        }
-
         if (!mesh.userData.originalColor) {
           mesh.userData.originalColor = (mesh.material as THREE.MeshStandardMaterial).color.getHex();
         }
-
-        (mesh.material as THREE.MeshStandardMaterial).color.set(0xff0000); // Standard red highlight
         setSelected(mesh);
-        console.log("STLModel: Highlighted mesh:", { meshName: mesh.name, color: "red" });
       }
     };
 
     gl.domElement.addEventListener("click", handleClick);
     return () => gl.domElement.removeEventListener("click", handleClick);
-  }, [highlightEnabled, camera, gl, selected]);
-
-  useEffect(() => {
-    if (!highlightEnabled && selected) {
-      const mat = selected.material as THREE.MeshStandardMaterial;
-      const originalColor = selected.userData.originalColor;
-      if (originalColor) mat.color.setHex(originalColor);
-      setSelected(null);
-      console.log("STLModel: Highlight reset");
-    }
-  }, [highlightEnabled, selected]);
+  }, [props.highlightEnabled, camera, gl]);
 
   return (
     <mesh ref={meshRef} geometry={geometry} castShadow receiveShadow>
       <meshStandardMaterial
         color={0x808080}
-        wireframe={wireframe}
-        clippingPlanes={clippingEnabled ? clippingPlanes : []}
-        clipShadows={clippingEnabled}
+        wireframe={props.wireframe}
+        clippingPlanes={props.clippingEnabled ? props.clippingPlanes : []}
+        clipShadows={props.clippingEnabled}
         side={THREE.DoubleSide}
       />
     </mesh>
   );
 }
+
 
 class ModelErrorBoundary extends Component<{ children: React.ReactNode }, { hasError: boolean }> {
   state = { hasError: false };
@@ -205,36 +210,11 @@ function Model({ url, name, wireframe, clippingEnabled, clippingPlanes, highligh
   const [isLoadingType, setIsLoadingType] = useState(false);
 
   useEffect(() => {
-    console.log("Model: Initializing with:", { url, name });
-    // Reset state for new file
     setIsSTL(name.toLowerCase().endsWith(".stl"));
     setIsLoadingType(name === "unknown");
+  }, [url, name]);
 
-    if (name === "unknown") {
-      console.log("Model: Checking file type for:", { url, name });
-      const loader = new STLLoader();
-      loader.load(
-        url,
-        () => {
-          console.log("Model: Confirmed STL file");
-          setIsSTL(true);
-          setIsLoadingType(false);
-        },
-        undefined,
-        (error) => {
-          console.log("Model: Not an STL file, attempting GLTF", error);
-          setIsSTL(false);
-          setIsLoadingType(false);
-        }
-      );
-    }
-  }, [url, name]); // Run on url or name change
-
-  console.log("Model component:", { url, name, isSTL, isLoadingType });
-
-  if (isLoadingType) {
-    return null; // Wait for file type detection
-  }
+  if (isLoadingType) return null;
 
   return (
     <ModelErrorBoundary>
@@ -287,26 +267,6 @@ export const ModelViewer = ({ modelUrl, wireframe, environmentPreset, modelName 
     }
   };
 
-  useEffect(() => {
-    console.log("ModelViewer props:", { modelUrl, modelName });
-    if (!modelUrl) {
-      console.warn("ModelViewer: modelUrl is null");
-      toast.info("Please upload a 3D model to view");
-    }
-    if (!modelName) {
-      console.warn("ModelViewer: modelName is null, attempting to detect file type");
-    }
-  }, [modelUrl, modelName]);
-
-  useEffect(() => {
-    return () => {
-      if (modelUrl) {
-        console.log("ModelViewer: Revoking URL:", modelUrl);
-        URL.revokeObjectURL(modelUrl);
-      }
-    };
-  }, [modelUrl]);
-
   return (
     <div className="relative w-full h-full bg-canvas-bg rounded-lg overflow-hidden">
       <Canvas shadows gl={{ localClippingEnabled: true, preserveDrawingBuffer: true }}>
@@ -329,16 +289,9 @@ export const ModelViewer = ({ modelUrl, wireframe, environmentPreset, modelName 
           enableDamping={true}
         />
         {modelUrl && (
-          <Suspense
-            fallback={
-              <mesh>
-                <boxGeometry args={[1, 1, 1]} />
-                <meshStandardMaterial color="#666" wireframe />
-              </mesh>
-            }
-          >
+          <Suspense fallback={<mesh><boxGeometry args={[1, 1, 1]} /><meshStandardMaterial color="#666" wireframe /></mesh>}>
             <Model
-              key={modelUrl} // Force remount on URL change
+              key={modelUrl}
               url={modelUrl}
               name={modelName || "unknown"}
               wireframe={wireframe}
@@ -352,20 +305,12 @@ export const ModelViewer = ({ modelUrl, wireframe, environmentPreset, modelName 
 
       <div className="absolute top-4 left-4 bg-card p-4 rounded-lg shadow space-y-2">
         <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={highlightEnabled}
-            onChange={(e) => setHighlightEnabled(e.target.checked)}
-          />
+          <input type="checkbox" checked={highlightEnabled} onChange={(e) => setHighlightEnabled(e.target.checked)} />
           Enable Click Highlight
         </label>
 
         <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={clippingEnabled}
-            onChange={(e) => setClippingEnabled(e.target.checked)}
-          />
+          <input type="checkbox" checked={clippingEnabled} onChange={(e) => setClippingEnabled(e.target.checked)} />
           Enable Cross-Section
         </label>
 
@@ -373,11 +318,7 @@ export const ModelViewer = ({ modelUrl, wireframe, environmentPreset, modelName 
           <>
             <label className="text-sm">
               Axis:
-              <select
-                value={clippingAxis}
-                onChange={(e) => setClippingAxis(e.target.value as "x" | "y" | "z")}
-                className="ml-2 p-1 rounded border text-sm bg-black text-white"
-              >
+              <select value={clippingAxis} onChange={(e) => setClippingAxis(e.target.value as "x" | "y" | "z")} className="ml-2 p-1 rounded border text-sm bg-black text-white">
                 <option value="x">X</option>
                 <option value="y">Y</option>
                 <option value="z">Z</option>
@@ -386,25 +327,13 @@ export const ModelViewer = ({ modelUrl, wireframe, environmentPreset, modelName 
 
             <label className="text-sm block">
               Position:
-              <input
-                type="range"
-                min={-5}
-                max={5}
-                step={0.1}
-                value={planeConstant}
-                onChange={(e) => setPlaneConstant(parseFloat(e.target.value))}
-                className="w-full"
-              />
+              <input type="range" min={-5} max={5} step={0.1} value={planeConstant} onChange={(e) => setPlaneConstant(parseFloat(e.target.value))} className="w-full" />
             </label>
           </>
         )}
       </div>
 
-      <button
-        onClick={resetCamera}
-        className="absolute bottom-4 right-4 bg-primary text-primary-foreground px-3 py-2 rounded-md 
-                   hover:bg-primary/90 transition-colors duration-200 text-sm font-medium"
-      >
+      <button onClick={resetCamera} className="absolute bottom-4 right-4 bg-primary text-primary-foreground px-3 py-2 rounded-md hover:bg-primary/90 transition-colors duration-200 text-sm font-medium">
         Reset Camera
       </button>
 
@@ -425,3 +354,4 @@ export const ModelViewer = ({ modelUrl, wireframe, environmentPreset, modelName 
 };
 
 export default ModelViewer;
+
